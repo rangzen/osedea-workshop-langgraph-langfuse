@@ -53,6 +53,10 @@ You are a searcher that will use Wikipedia and Tavily search to answer the quest
 - Try with random user IDs, see [main.py](./steps/4-users/main.py#L387) for the user ID generation.
 - Try with the same user ID, see [main.py](./steps/4-users/main.py#L389) for a fixed user ID.
 
+### Step Session
+
+- Try with random session IDs, see [main.py](./steps/5-sessions/main.py#L392) for the session ID generation.
+
 ## References
 
 - [LangGraph](https://github.com/langchain-ai/langgraph)
