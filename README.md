@@ -46,7 +46,7 @@ You are a searcher that will use Wikipedia and Tavily search to answer the quest
 - Labels: check the `"Set the "production" label`
 
 - Duplicate to `research-wikipedia-tavily-concise`.
-- Change the promt text to `You are concise. [...]`
+- Change the promt text to `You are extremely concise. You answer with only one sentence. [...]`
 
 ### Step User
 
