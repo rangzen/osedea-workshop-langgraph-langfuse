@@ -15,7 +15,6 @@ from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
 from langfuse import Langfuse  # type: ignore
 from langfuse.callback import CallbackHandler  # type: ignore
-from langfuse.decorators import langfuse_context, observe  # type: ignore
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 from typing_extensions import TypedDict
@@ -252,7 +251,6 @@ def generate_answer(state: State, config: RunnableConfig) -> dict:
     }
 
 
-@observe()
 def check_answer_quality(
     state: State, config: RunnableConfig
 ) -> Command[Literal["closure", "search_web"]]:
@@ -311,21 +309,6 @@ def check_answer_quality(
 
     # Possible Exercise: use Pydantic to force the return type of the LLM call to be "good" or "bad"
     if "good" in content.lower():
-
-        # Simulate a user feedback with a note from 1 to 5.
-        # In a real application, you would get this from the user input.
-        # See https://langfuse.com/docs/scores/user-feedback#integration-example
-        # to see how to use the LangfuseWeb component to collect user feedback.
-        user_feedback = random.randint(1, 5)
-        trace_id = langfuse_context.get_current_trace_id()
-        langfuse.score(
-            trace_id=trace_id,
-            name="user_feedback",
-            value=user_feedback,
-            data_type="NUMERIC", # optional, inferred if not provided
-        )
-        logging.info(f"Simulate user feedback: {user_feedback} (1 to 5)")
-
         return Command(
             update={
                 "steps_history": ["answer is good"],
@@ -411,6 +394,10 @@ def run_graph(question):
     # user_id = str(uuid.uuid4())
     # session_id = f"session-{str(uuid.uuid4()[:8])}"
 
+    # Prepare a managed run ID so that the trace can be sent to Langfuse
+    # even after the graph has run.
+    predefined_run_id = str(uuid.uuid4())
+
     # Initialize state
     initial_state = State(
         question=question,
@@ -423,6 +410,7 @@ def run_graph(question):
 
     # Config (read-only in langgraph!)
     config = {
+        "run_id": predefined_run_id,
         "steps_max": GRAPH_STEPS_MAX,
         "model_calls_max": GRAPH_MODEL_CALLS_MAX,
         "osedea_find_percent": GRAPH_OSEDEA_FIND_PERCENT,
@@ -437,7 +425,7 @@ def run_graph(question):
     # Run the graph
     result_state = graph.invoke(initial_state, config)
 
-    return result_state["answer"]
+    return predefined_run_id, result_state["answer"]
 
 
 def complete(text, state):
@@ -470,6 +458,19 @@ if __name__ == "__main__":
         exit(0)
 
     logging.info("Running graph...")
-    answer = run_graph(question)
+    run_id, answer = run_graph(question)
     logging.info(f"Answer: {answer.content}")
     logging.info("Graph finished.")
+
+    # Simulate a user feedback with a note from 1 to 5.
+    # In a real application, you would get this from the user input.
+    # See https://langfuse.com/docs/scores/user-feedback#integration-example
+    # to see how to use the LangfuseWeb component to collect user feedback.
+    user_feedback = random.randint(1, 5)
+    langfuse.score(
+        trace_id=run_id,
+        name="user_feedback",
+        value=user_feedback,
+        data_type="NUMERIC",  # optional, inferred if not provided
+    )
+    logging.info(f"Simulate user feedback: {user_feedback} (1 to 5)")
