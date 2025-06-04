@@ -3,18 +3,14 @@ import operator
 import os
 import random
 import readline
-import uuid
 from typing import Annotated, Literal
 
 from dotenv import load_dotenv
 from langchain_community.document_loaders import WikipediaLoader
 from langchain_community.tools import TavilySearchResults
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
-from langfuse import Langfuse  # type: ignore
-from langfuse.callback import CallbackHandler  # type: ignore
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 from typing_extensions import TypedDict
@@ -37,10 +33,6 @@ GRAPH_WEB_MAX_RESULTS_AT_START = 1
 The maximum number of results to return from web search.
 If the search returns no results, we will increase this value by 2 each time we search again.
 """
-GRAPH_GEN_ANSWER_PROMPTS = [
-    "research-wikipedia-tavily-kind",
-    "research-wikipedia-tavily-concise",
-]
 GRAPH_MODEL_CALLS_MAX = 6
 """The maximum number of LLM calls to make (inclusive)"""
 MODEL_NAME = "gpt-4o-mini"
@@ -64,13 +56,6 @@ EXAMPLES = [
     ),
 ]
 
-# Initialize Langfuse
-# Make sure to set the environment variables
-# LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, and LANGFUSE_HOST
-langfuse_handler = CallbackHandler()
-
-# Configuration to use langfuse objects and helpers
-langfuse = Langfuse()
 
 # Initialize LLM
 # We can create a new LLM instance for each node, but it is not necessary in this simple graph example.
@@ -86,8 +71,6 @@ class ConfigSchema(TypedDict):
     """The maximum number of LLM calls to make"""
     osedea_find_percent: float
     """The percentage of chance to find a result in Osedea docs"""
-    gen_answer_prompts: list[str]
-    """The list of prompts to use for the answer generation"""
 
 
 class State(TypedDict):
@@ -113,15 +96,23 @@ def choose_tool(
     """Node to choose the tool to use based on the question"""
     logging.info(f"Choosing a tool for the question: {state['question']}")
 
+    # If we already tried a tool and get back, try something else randomly.
+    if len(state["steps_history"]) > 0:
+        logging.info("Routing to a different tool randomly...")
+        return Command(
+            update={"steps_history": ["choose random"]},
+            goto=random.choice(["search_osedea", "search_web", "search_wikipedia"]),
+        )
+
     # Check "naively" if the question is about a specific topic that we can find in the question.
     # In a real-world scenario, you would use a more sophisticated method to determine the tool to use.
-    if "wikipedia" in state["question"].lower():
+    if "wikipedia" in state["question"].lower() and "choose wikipedia" not in state["steps_history"]:
         logging.info("Routing to Wikipedia search...")
         return Command(
             update={"steps_history": ["choose wikipedia"]},
             goto="search_wikipedia",
         )
-    elif "osedea" in state["question"].lower():
+    elif "osedea" in state["question"].lower() and "choose osedea" not in state["steps_history"]:
         logging.info("Routing to Osedea search...")
         return Command(
             update={"steps_history": ["choose osedea"]},
@@ -213,36 +204,22 @@ def search_wikipedia(state: State) -> dict:
     }
 
 
-def generate_answer(state: State, config: RunnableConfig) -> dict:
+def generate_answer(state: State) -> dict:
     """Node to generate an answer using the context and the question"""
 
     logging.info("Generating answer...")
 
-    # Prepare system prompt from langfuse
-    prompt_name = random.choice(config["configurable"]["gen_answer_prompts"])
-    logging.info(f"Using prompt: {prompt_name}")
-    langfuse_prompt = langfuse.get_prompt(prompt_name)
-    # See https://github.com/langfuse/langfuse/issues/5374#issuecomment-2686397964
-    # about the issue with ChatPromptTemplate or SystemMessagePromptTemplate
-    prompt_template = PromptTemplate.from_template(
-        # convert langfuse prompt {{}} to langchain prompt {} for formatting
-        langfuse_prompt.get_langchain_prompt(),
-        # necessary for langfuse to track prompt usage in traces
-        metadata={"langfuse_prompt": langfuse_prompt},
+    context = state["context"]
+    question = state["question"]
+
+    # Template
+    answer_template = """Answer the question {question} using this context: {context}. And only the data from the context. Do not add information."""
+    answer_instructions = answer_template.format(question=question, context=context)
+
+    answer = llm.invoke(
+        [SystemMessage(content=answer_instructions)]
+        + [HumanMessage(content="Answer the question.")]
     )
-
-    # Create the chain.
-    # You need this construction to have the prompt tracked in traces.
-    # Otherwise, created manually, the prompt will not be tracked in traces.
-    generate_answer_chain = prompt_template | llm
-
-    # Prepare chain_context related to the prompt
-    chain_context = {
-        "question": state["question"],
-        "context": state["context"],
-    }
-
-    answer = generate_answer_chain.invoke(chain_context, config=config)
 
     return {
         "steps_history": ["generate answer"],
@@ -253,7 +230,7 @@ def generate_answer(state: State, config: RunnableConfig) -> dict:
 
 def check_answer_quality(
     state: State, config: RunnableConfig
-) -> Command[Literal["closure", "search_web"]]:
+) -> Command[Literal["closure", "choose_tool"]]:
     logging.info("Checking answer quality...")
 
     check_template = """Check if the answer is good enough to be sent to the user.
@@ -274,8 +251,7 @@ def check_answer_quality(
     check_instructions = check_template.format(answer=state["answer"])
     check_answer = llm.invoke(
         [SystemMessage(content=check_instructions)]
-        + [HumanMessage(content="Check the answer quality.")],
-        config=config,
+        + [HumanMessage(content="Check the answer quality.")]
     )
     logging.info(f"Answer quality check: {check_answer.content}")
 
@@ -328,7 +304,7 @@ def check_answer_quality(
                 "llm_calls": state["llm_calls"] + 1,
                 "web_max_results": state["web_max_results"] + 2,
             },
-            goto="search_web",
+            goto="choose_tool",
         )
 
 
@@ -380,20 +356,6 @@ with open(file_path, "wb") as f:
 def run_graph(question):
     """Run the graph with a question"""
 
-    # Simulate a user ID from an authentication system.
-    # In a real application, you would get this from your authentication system.
-    # For example, you could get the user ID from the JWT token or from the session.
-    # or you can use a fixed user ID for testing traces related to a fixed user.
-
-    # Simulate multiple questions from the same user during the same run with sessions.
-    # Run this graph multiple times with the same user ID and session ID to see how the traces are grouped.
-    # Sessions are useful to group traces related to the same user interaction.
-    user_id = "42"
-    session_id = "session-42"
-    # or generate randomly.
-    # user_id = str(uuid.uuid4())
-    # session_id = f"session-{str(uuid.uuid4()[:8])}"
-
     # Initialize state
     initial_state = State(
         question=question,
@@ -409,12 +371,6 @@ def run_graph(question):
         "steps_max": GRAPH_STEPS_MAX,
         "model_calls_max": GRAPH_MODEL_CALLS_MAX,
         "osedea_find_percent": GRAPH_OSEDEA_FIND_PERCENT,
-        "gen_answer_prompts": GRAPH_GEN_ANSWER_PROMPTS,
-        "callbacks": [langfuse_handler],
-        "metadata": {
-            "langfuse_user_id": user_id,
-            "langfuse_session_id": session_id,
-        },
     }
 
     # Run the graph

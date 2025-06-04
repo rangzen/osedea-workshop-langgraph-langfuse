@@ -113,15 +113,23 @@ def choose_tool(
     """Node to choose the tool to use based on the question"""
     logging.info(f"Choosing a tool for the question: {state['question']}")
 
+    # If we already tried a tool and get back, try something else randomly.
+    if len(state["steps_history"]) > 0:
+        logging.info("Routing to a different tool randomly...")
+        return Command(
+            update={"steps_history": ["choose random"]},
+            goto=random.choice(["search_osedea", "search_web", "search_wikipedia"]),
+        )
+
     # Check "naively" if the question is about a specific topic that we can find in the question.
     # In a real-world scenario, you would use a more sophisticated method to determine the tool to use.
-    if "wikipedia" in state["question"].lower():
+    if "wikipedia" in state["question"].lower() and "choose wikipedia" not in state["steps_history"]:
         logging.info("Routing to Wikipedia search...")
         return Command(
             update={"steps_history": ["choose wikipedia"]},
             goto="search_wikipedia",
         )
-    elif "osedea" in state["question"].lower():
+    elif "osedea" in state["question"].lower() and "choose osedea" not in state["steps_history"]:
         logging.info("Routing to Osedea search...")
         return Command(
             update={"steps_history": ["choose osedea"]},
@@ -253,7 +261,7 @@ def generate_answer(state: State, config: RunnableConfig) -> dict:
 
 def check_answer_quality(
     state: State, config: RunnableConfig
-) -> Command[Literal["closure", "search_web"]]:
+) -> Command[Literal["closure", "choose_tool"]]:
     logging.info("Checking answer quality...")
 
     check_template = """Check if the answer is good enough to be sent to the user.
@@ -328,7 +336,7 @@ def check_answer_quality(
                 "llm_calls": state["llm_calls"] + 1,
                 "web_max_results": state["web_max_results"] + 2,
             },
-            goto="search_web",
+            goto="choose_tool",
         )
 
 
@@ -383,20 +391,10 @@ def run_graph(question):
     # Simulate a user ID from an authentication system.
     # In a real application, you would get this from your authentication system.
     # For example, you could get the user ID from the JWT token or from the session.
+    # For this example, we will just generate a random UUID.
+    user_id = str(uuid.uuid4())
     # or you can use a fixed user ID for testing traces related to a fixed user.
-
-    # Simulate multiple questions from the same user during the same run with sessions.
-    # Run this graph multiple times with the same user ID and session ID to see how the traces are grouped.
-    # Sessions are useful to group traces related to the same user interaction.
-    user_id = "42"
-    session_id = "session-42"
-    # or generate randomly.
-    # user_id = str(uuid.uuid4())
-    # session_id = f"session-{str(uuid.uuid4()[:8])}"
-
-    # Prepare a managed run ID so that the trace can be sent to Langfuse
-    # even after the graph has run.
-    predefined_run_id = str(uuid.uuid4())
+    # user_id = "42"
 
     # Initialize state
     initial_state = State(
@@ -410,7 +408,6 @@ def run_graph(question):
 
     # Config (read-only in langgraph!)
     config = {
-        "run_id": predefined_run_id,
         "steps_max": GRAPH_STEPS_MAX,
         "model_calls_max": GRAPH_MODEL_CALLS_MAX,
         "osedea_find_percent": GRAPH_OSEDEA_FIND_PERCENT,
@@ -418,14 +415,13 @@ def run_graph(question):
         "callbacks": [langfuse_handler],
         "metadata": {
             "langfuse_user_id": user_id,
-            "langfuse_session_id": session_id,
         },
     }
 
     # Run the graph
     result_state = graph.invoke(initial_state, config)
 
-    return predefined_run_id, result_state["answer"]
+    return result_state["answer"]
 
 
 def complete(text, state):
@@ -458,19 +454,6 @@ if __name__ == "__main__":
         exit(0)
 
     logging.info("Running graph...")
-    run_id, answer = run_graph(question)
+    answer = run_graph(question)
     logging.info(f"Answer: {answer.content}")
     logging.info("Graph finished.")
-
-    # Simulate a user feedback with a note from 1 to 5.
-    # In a real application, you would get this from the user input.
-    # See https://langfuse.com/docs/scores/user-feedback#integration-example
-    # to see how to use the LangfuseWeb component to collect user feedback.
-    user_feedback = random.randint(1, 5)
-    langfuse.score(
-        trace_id=run_id,
-        name="user_feedback",
-        value=user_feedback,
-        data_type="NUMERIC",  # optional, inferred if not provided
-    )
-    logging.info(f"Simulate user feedback: {user_feedback} (1 to 5)")

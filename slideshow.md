@@ -89,6 +89,8 @@ This can be done with langgraph in 20 lines of code, instead of the example, but
 
 ## React Pattern
 
+REAsoning & ACTing.
+
 ---
 
 ## Agent Node

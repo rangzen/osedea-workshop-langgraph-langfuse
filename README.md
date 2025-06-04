@@ -4,7 +4,8 @@ Going from the [Osedea Hackaton Boilerplate](https://github.com/rangzen/osedea-h
 
 Steps:
 
-1. The initial example is a LangGraph example that uses Wikipedia and Tavily as nodes in the graph.
+1. The initial example is a linear workflow with LangGraph that uses Wikipedia and Tavily as nodes in the graph.
+1. We add a loop to the example to restart if the answer is not satisfactory.
 1. We add LangFuse to the example to track the usage of the nodes in the graph.
 1. We add prompts management to the example to track the usage of the prompts in the graph.
 1. We add user management to the example to track the usage of the users in the graph.
@@ -50,16 +51,16 @@ You are a searcher that will use Wikipedia and Tavily search to answer the quest
 
 ### Step User
 
-- Try with random user IDs, see [main.py](./steps/4-users/main.py#L387) for the user ID generation.
-- Try with the same user ID, see [main.py](./steps/4-users/main.py#L389) for a fixed user ID.
-
-### Step User Feedback
-
-- Check score, see [main.py](./steps/6-feedback/main.py#L392) for the user ID generation.
+- Try with random user IDs, see [main.py](./steps/5-users/main.py#L387) for the user ID generation.
+- Try with the same user ID, see [main.py](./steps/5-users/main.py#L389) for a fixed user ID.
 
 ### Step Session
 
-- Try with random session IDs, see [main.py](./steps/5-sessions/main.py#L319) for the session ID generation.
+- Try with random session IDs, see [main.py](./steps/6-sessions/main.py#L395) for the session ID generation.
+
+### Step User Feedback
+
+- Check score, see [main.py](./steps/7-user-feedback/main.py#L469) for the user ID generation.
 
 ## References
 

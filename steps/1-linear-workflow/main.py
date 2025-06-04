@@ -9,11 +9,8 @@ from dotenv import load_dotenv
 from langchain_community.document_loaders import WikipediaLoader
 from langchain_community.tools import TavilySearchResults
 from langchain_core.messages import HumanMessage, SystemMessage
-from langchain_core.prompts import PromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_openai import ChatOpenAI
-from langfuse import Langfuse  # type: ignore
-from langfuse.callback import CallbackHandler  # type: ignore
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 from typing_extensions import TypedDict
@@ -23,8 +20,6 @@ logging.basicConfig(level=logging.INFO)
 load_dotenv()
 
 # Constants (default values)
-GRAPH_STEPS_MAX = 10
-"""The maximum number of steps to run the graph (inclusive)"""
 GRAPH_OSEDEA_FIND_PERCENT = 0.5
 """
 50% chance to find a result in Osedea docs.
@@ -36,12 +31,6 @@ GRAPH_WEB_MAX_RESULTS_AT_START = 1
 The maximum number of results to return from web search.
 If the search returns no results, we will increase this value by 2 each time we search again.
 """
-GRAPH_GEN_ANSWER_PROMPTS = [
-    "research-wikipedia-tavily-kind",
-    "research-wikipedia-tavily-concise",
-]
-GRAPH_MODEL_CALLS_MAX = 6
-"""The maximum number of LLM calls to make (inclusive)"""
 MODEL_NAME = "gpt-4o-mini"
 """The model to use for the LLM"""
 MODEL_TEMPERATURE = 0.0
@@ -63,13 +52,6 @@ EXAMPLES = [
     ),
 ]
 
-# Initialize Langfuse
-# Make sure to set the environment variables
-# LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, and LANGFUSE_HOST
-langfuse_handler = CallbackHandler()
-
-# Configuration to use langfuse objects and helpers
-langfuse = Langfuse()
 
 # Initialize LLM
 # We can create a new LLM instance for each node, but it is not necessary in this simple graph example.
@@ -79,14 +61,8 @@ llm = ChatOpenAI(model=MODEL_NAME, temperature=MODEL_TEMPERATURE)
 class ConfigSchema(TypedDict):
     """Config schema for the graph."""
 
-    steps_max: int
-    """The maximum number of steps to run"""
-    model_calls_max: int
-    """The maximum number of LLM calls to make"""
     osedea_find_percent: float
     """The percentage of chance to find a result in Osedea docs"""
-    gen_answer_prompts: list[str]
-    """The list of prompts to use for the answer generation"""
 
 
 class State(TypedDict):
@@ -98,8 +74,6 @@ class State(TypedDict):
     """The context to use for the answer"""
     answer: str
     """The answer to the question"""
-    llm_calls: int
-    """The number of LLM calls made so far. Beware, we use a simple state update, this will not work with multiple concurrent calls."""
     web_max_results: int
     """The maximum number of results to return from web search"""
     steps_history: Annotated[list[str], operator.add]
@@ -212,123 +186,27 @@ def search_wikipedia(state: State) -> dict:
     }
 
 
-def generate_answer(state: State, config: RunnableConfig) -> dict:
+def generate_answer(state: State) -> dict:
     """Node to generate an answer using the context and the question"""
 
     logging.info("Generating answer...")
 
-    # Prepare system prompt from langfuse
-    prompt_name = random.choice(config["configurable"]["gen_answer_prompts"])
-    logging.info(f"Using prompt: {prompt_name}")
-    langfuse_prompt = langfuse.get_prompt(prompt_name)
-    # See https://github.com/langfuse/langfuse/issues/5374#issuecomment-2686397964
-    # about the issue with ChatPromptTemplate or SystemMessagePromptTemplate
-    prompt_template = PromptTemplate.from_template(
-        # convert langfuse prompt {{}} to langchain prompt {} for formatting
-        langfuse_prompt.get_langchain_prompt(),
-        # necessary for langfuse to track prompt usage in traces
-        metadata={"langfuse_prompt": langfuse_prompt},
+    context = state["context"]
+    question = state["question"]
+
+    # Template
+    answer_template = """Answer the question {question} using this context: {context}. And only the data from the context. Do not add information."""
+    answer_instructions = answer_template.format(question=question, context=context)
+
+    answer = llm.invoke(
+        [SystemMessage(content=answer_instructions)]
+        + [HumanMessage(content="Answer the question.")]
     )
-
-    # Create the chain.
-    # You need this construction to have the prompt tracked in traces.
-    # Otherwise, created manually, the prompt will not be tracked in traces.
-    generate_answer_chain = prompt_template | llm
-
-    # Prepare chain_context related to the prompt
-    chain_context = {
-        "question": state["question"],
-        "context": state["context"],
-    }
-
-    answer = generate_answer_chain.invoke(chain_context, config=config)
 
     return {
         "steps_history": ["generate answer"],
-        "llm_calls": state["llm_calls"] + 1,
         "answer": answer,
     }
-
-
-def check_answer_quality(
-    state: State, config: RunnableConfig
-) -> Command[Literal["closure", "search_web"]]:
-    logging.info("Checking answer quality...")
-
-    check_template = """Check if the answer is good enough to be sent to the user.
-    If the answer contains "I'm sorry",
-    or "I couldn't find",
-    or "I don't know",
-    or "I can't answer",
-    or "I don't have enough information",
-    or "I need more context",
-    or "I need more information",
-    or "I need more details",
-    or "I need more context",
-    or "I need more data", then the answer is bad.
-    Otherwise, the answer is good.
-    Return only "good" or "bad", nothing else.
-    Just choose between "good" or "bad".
-    Answer: {answer}"""
-    check_instructions = check_template.format(answer=state["answer"])
-    check_answer = llm.invoke(
-        [SystemMessage(content=check_instructions)]
-        + [HumanMessage(content="Check the answer quality.")],
-        config=config,
-    )
-    logging.info(f"Answer quality check: {check_answer.content}")
-
-    content = check_answer.content
-    if isinstance(content, list):
-        content = " ".join(str(item) for item in content)
-    elif not isinstance(content, str):
-        content = str(content)
-
-    # Did we reach the maximum number of steps?
-    # If yes, whatever the answer quality, we stop the graph.
-    if len(state["steps_history"]) >= config["configurable"]["steps_max"]:
-        logging.info("Reached maximum number of steps.")
-        return Command(
-            update={
-                "steps_history": ["too many steps"],
-            },
-            goto="closure",
-        )
-
-    # Did we reach the maximum number of LLM calls?
-    # If yes, whatever the answer quality, we stop the graph.
-    if state["llm_calls"] >= config["configurable"]["model_calls_max"]:
-        logging.info("Reached maximum number of LLM calls.")
-        return Command(
-            update={
-                "steps_history": ["too many LLM calls"],
-            },
-            goto="closure",
-        )
-
-    # Possible Exercise: use Pydantic to force the return type of the LLM call to be "good" or "bad"
-    if "good" in content.lower():
-        return Command(
-            update={
-                "steps_history": ["answer is good"],
-                "llm_calls": state["llm_calls"] + 1,
-            },
-            goto="closure",
-        )
-    else:
-        # Try to search on the web with more results
-        # Possible Exercise:
-        # Beware, we do not implement a reducer capable of resetting the context
-        # so the previous part of the context will be kept
-        # and it’s the context that leads to the answer considered bad
-        return Command(
-            update={
-                "steps_history": ["answer is bad"],
-                "llm_calls": state["llm_calls"] + 1,
-                "web_max_results": state["web_max_results"] + 2,
-            },
-            goto="search_web",
-        )
 
 
 def closure(state: State) -> dict:
@@ -336,7 +214,6 @@ def closure(state: State) -> dict:
     logging.info("Ending the graph.")
 
     logging.info("Steps history: " + " -> ".join(state["steps_history"]))
-    logging.info(f"Number of LLM calls: {state['llm_calls']}")
 
     return {}
 
@@ -350,7 +227,6 @@ builder.add_node("search_osedea", search_osedea)
 builder.add_node("search_web", search_web)
 builder.add_node("search_wikipedia", search_wikipedia)
 builder.add_node("generate_answer", generate_answer)
-builder.add_node("check_answer_quality", check_answer_quality)
 builder.add_node("closure", closure)
 
 # Edges
@@ -359,7 +235,7 @@ builder.add_edge(START, "choose_tool")
 builder.add_edge("search_osedea", "generate_answer")
 builder.add_edge("search_wikipedia", "generate_answer")
 builder.add_edge("search_web", "generate_answer")
-builder.add_edge("generate_answer", "check_answer_quality")
+builder.add_edge("generate_answer", "closure")
 builder.add_edge("closure", END)
 
 # Compile the graph
@@ -391,11 +267,7 @@ def run_graph(question):
 
     # Config (read-only in langgraph!)
     config = {
-        "steps_max": GRAPH_STEPS_MAX,
-        "model_calls_max": GRAPH_MODEL_CALLS_MAX,
         "osedea_find_percent": GRAPH_OSEDEA_FIND_PERCENT,
-        "gen_answer_prompts": GRAPH_GEN_ANSWER_PROMPTS,
-        "callbacks": [langfuse_handler],
     }
 
     # Run the graph
