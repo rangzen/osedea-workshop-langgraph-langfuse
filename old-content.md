@@ -1,34 +1,5 @@
----
-marp: true
-author: "Cedric L’homme"
-size: 16:9
-theme: gaia
-footer: "All rights reserved © Osedea 2025"
----
 
-# Osedea Workshop on Langgraph and Langfuse
 
-Event oriented programming or microservices are too easy to debug? You want randomness in your results?
-
-You have it with agents!
-
----
-
-## Goal of this workshop
-
-From a simple example (workflow/agent), introduce observability with Langfuse.
-
-Beware, this content will probably be outdated in 6 months...
-
----
-
-## Langgraph
-
-Control flow (edges) and state updates (nodes).
-
-![width:800px](https://langchain-ai.github.io/langgraph/concepts/img/agent_workflow.png)
-
----
 
 ## Example Step 1: State Definition
 
