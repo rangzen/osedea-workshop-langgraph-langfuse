@@ -1,6 +1,6 @@
 # Workshop on LangGraph & LangFuse
 
-In this workshop, we'll be going from the [Osedea Hackaton Boilerplate](https://github.com/rangzen/osedea-hackaton-2025-boilerplate) LangGraph example (~almost) to a LangFuse integrated example. We'll touch on basic agents, patterns and observability. The project is setup in multiple steps to easily create diffs and see what changes between each steps. 
+In this workshop, we'll be going from the [Osedea Hackaton Boilerplate](https://github.com/rangzen/osedea-hackaton-2025-boilerplate) LangGraph example (~almost) to a Langfuse integrated example. We'll touch on basic agents, patterns and observability. The project is setup in multiple steps to easily create diffs and see what changes between each steps.
 
 Steps:
 
@@ -11,7 +11,6 @@ Steps:
 1. We add user management to the example to track the usage of the users in the graph.
 1. We add session management to the example to track the usage of the sessions in the graph.
 1. We add retro from the users.
-
 
 ## Requirements
 
@@ -60,7 +59,7 @@ Here is a breakdown of the variables needed for each step:
 
 You will need to manually fill the step 1-7 envs with the following content:
 
-```
+```text
 OPENAI_API_KEY="your_openai_api_key"
 TAVILY_API_KEY="your_tavily_api_key"
 ```
